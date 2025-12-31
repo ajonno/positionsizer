@@ -1,16 +1,57 @@
-# React + Vite
+# Position Sizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A trading position size calculator that helps manage risk by calculating the correct position size based on your account equity, risk tolerance, and trade parameters.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Crypto & Equities** - Separate tabs with independent state for each asset type
+- **Long & Short Trades** - Support for both trade directions with appropriate validation
+- **Currency Conversion** - Automatic exchange rate fetching when account currency differs from asset currency
+- **Live Price Fetching** - Get current prices from CoinGecko (crypto) or Yahoo Finance (stocks)
+- **Target Price & R-Multiples** - Optional target with quick 1x, 2x, 3x, 5x buttons
+- **Risk/Reward Display** - Shows potential profit and risk/reward ratio
+- **PWA Support** - Works offline once installed
 
-## React Compiler
+## Formula
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```
+Position Size = (Account Equity × Risk %) / |Entry Price - Stop Loss|
+```
 
-## Expanding the ESLint configuration
+## Getting Started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+```
+
+## Usage
+
+1. Select asset type (Crypto or Equity)
+2. Choose trade direction (Long or Short)
+3. Enter your account equity and select currency
+4. Set your risk percentage per trade
+5. Enter or fetch the entry price
+6. Set your stop loss price
+7. Optionally set a target price or use R-multiple buttons
+
+The calculator will display:
+- Position size (units/shares)
+- Position value
+- Risk amount in your account currency
+- Potential profit (if target is set)
+- Risk/reward ratio (if target is set)
+
+## Tech Stack
+
+- React + Vite
+- PWA (vite-plugin-pwa)
+- CoinGecko API (crypto prices)
+- Yahoo Finance API (stock prices)
+- Frankfurter API (exchange rates)
