@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
+import { useAuth } from './AuthContext'
+import LoginPage from './LoginPage'
 
 const FIAT_CURRENCIES = ['USD', 'AUD', 'EUR', 'GBP', 'CAD', 'JPY', 'CHF', 'NZD']
 const CRYPTO_ACCOUNT_CURRENCIES = ['USDC', 'USDT', 'USD', 'AUD', 'EUR', 'GBP']
@@ -45,6 +47,7 @@ const CRYPTO_IDS = {
 }
 
 function App() {
+  const { user, loading, logout } = useAuth()
   const [assetType, setAssetType] = useState('crypto')
   const [tradeDirection, setTradeDirection] = useState('long')
 
@@ -349,11 +352,38 @@ function App() {
     return assetType === 'crypto' ? quoteCurrency : assetCurrency
   }
 
+  // Show loading spinner while checking auth
+  if (loading) {
+    return (
+      <div className="app">
+        <div className="loading-screen">
+          <div className="spinner"></div>
+        </div>
+      </div>
+    )
+  }
+
+  // Show login page if not authenticated
+  if (!user) {
+    return <LoginPage />
+  }
+
   return (
     <div className="app">
       <header className="header">
-        <h1>Position Sizer</h1>
-        <p className="subtitle">Calculate your position size for risk management</p>
+        <div className="header-content">
+          <div>
+            <h1>Position Sizer</h1>
+            <p className="subtitle">Signed in as {user.email}</p>
+          </div>
+          <button className="logout-btn" onClick={logout} title="Sign out">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          </button>
+        </div>
       </header>
 
       <main className="calculator">
