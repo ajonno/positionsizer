@@ -1,4 +1,4 @@
-import { useAuth } from './AuthContext'
+import { useAuth } from './auth-context'
 import './LoginPage.css'
 
 function LoginPage() {
@@ -45,7 +45,7 @@ function LoginPage() {
         <div className="login-features">
           <div className="feature">
             <span className="feature-icon">📊</span>
-            <span>Crypto & Equities</span>
+            <span>Crypto, Equities & Futures</span>
           </div>
           <div className="feature">
             <span className="feature-icon">💱</span>
