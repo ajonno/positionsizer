@@ -1,8 +1,7 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { auth, googleProvider } from './firebase'
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
-
-const AuthContext = createContext()
+import { AuthContext } from './auth-context'
 
 // Optional: Add allowed emails for restricted access
 const ALLOWED_EMAILS = [
@@ -14,23 +13,33 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const deniedDuringSignOutRef = useRef(false)
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user && ALLOWED_EMAILS.length > 0) {
+    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      if (nextUser && ALLOWED_EMAILS.length > 0) {
         // Check if user's email is in the allowed list
-        if (ALLOWED_EMAILS.includes(user.email)) {
-          setUser(user)
+        if (ALLOWED_EMAILS.includes(nextUser.email)) {
+          deniedDuringSignOutRef.current = false
+          setUser(nextUser)
           setError(null)
         } else {
           // Sign out unauthorized users
-          signOut(auth)
+          deniedDuringSignOutRef.current = true
+          void signOut(auth).catch((err) => {
+            console.error('Unauthorized sign out error:', err)
+          })
           setUser(null)
           setError('Access denied. Your email is not authorized.')
         }
       } else {
-        setUser(user)
-        setError(null)
+        setUser(nextUser)
+
+        if (deniedDuringSignOutRef.current) {
+          deniedDuringSignOutRef.current = false
+        } else {
+          setError(null)
+        }
       }
       setLoading(false)
     })
@@ -40,6 +49,7 @@ export function AuthProvider({ children }) {
 
   const signInWithGoogle = async () => {
     try {
+      deniedDuringSignOutRef.current = false
       setError(null)
       await signInWithPopup(auth, googleProvider)
     } catch (err) {
@@ -50,6 +60,8 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     try {
+      deniedDuringSignOutRef.current = false
+      setError(null)
       await signOut(auth)
     } catch (err) {
       console.error('Sign out error:', err)
@@ -62,5 +74,3 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   )
 }
-
-export const useAuth = () => useContext(AuthContext)

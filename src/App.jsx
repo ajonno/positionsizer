@@ -1,11 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './App.css'
-import { useAuth } from './AuthContext'
+import { useAuth } from './auth-context'
 import LoginPage from './LoginPage'
 
 const FIAT_CURRENCIES = ['USD', 'AUD', 'EUR', 'GBP', 'CAD', 'JPY', 'CHF', 'NZD']
 const CRYPTO_ACCOUNT_CURRENCIES = ['USDC', 'USDT', 'USD', 'AUD', 'EUR', 'GBP']
 const STABLECOINS = ['USDC', 'USDT', 'USD', 'BUSD', 'DAI']
+const RISK_PERCENT_PRESETS = [0.5, 1, 2, 3, 4, 5]
+const FUTURES_CONTRACTS = [
+  { code: 'ES', name: 'E-mini S&P 500', yahooSymbol: 'ES=F', pointValue: 50, tickSize: 0.25, tickValue: 12.5, currency: 'USD' },
+  { code: 'MES', name: 'Micro E-mini S&P 500', yahooSymbol: 'MES=F', pointValue: 5, tickSize: 0.25, tickValue: 1.25, currency: 'USD' },
+  { code: 'NQ', name: 'E-mini Nasdaq-100', yahooSymbol: 'NQ=F', pointValue: 20, tickSize: 0.25, tickValue: 5, currency: 'USD' },
+  { code: 'MNQ', name: 'Micro E-mini Nasdaq-100', yahooSymbol: 'MNQ=F', pointValue: 2, tickSize: 0.25, tickValue: 0.5, currency: 'USD' },
+  { code: 'YM', name: 'E-mini Dow', yahooSymbol: 'YM=F', pointValue: 5, tickSize: 1, tickValue: 5, currency: 'USD' },
+  { code: 'MYM', name: 'Micro E-mini Dow', yahooSymbol: 'MYM=F', pointValue: 0.5, tickSize: 1, tickValue: 0.5, currency: 'USD' },
+  { code: 'RTY', name: 'E-mini Russell 2000', yahooSymbol: 'RTY=F', pointValue: 50, tickSize: 0.1, tickValue: 5, currency: 'USD' },
+  { code: 'M2K', name: 'Micro E-mini Russell 2000', yahooSymbol: 'M2K=F', pointValue: 5, tickSize: 0.1, tickValue: 0.5, currency: 'USD' },
+]
+const FUTURES_CONTRACTS_BY_CODE = new Map(FUTURES_CONTRACTS.map((contract) => [contract.code, contract]))
 
 // Map stablecoins to USD for exchange rate API
 const toFiatCurrency = (currency) => {
@@ -46,6 +58,81 @@ const CRYPTO_IDS = {
   'BONK': 'bonk',
 }
 
+const resolvedCryptoIds = new Map(Object.entries(CRYPTO_IDS))
+
+const getBestCoinGeckoMatch = (coins, symbol) => {
+  const normalizedSymbol = symbol.toUpperCase()
+  const exactSymbolMatches = coins
+    .filter((coin) => coin.symbol?.toUpperCase() === normalizedSymbol)
+    .sort((a, b) => (a.market_cap_rank ?? Number.MAX_SAFE_INTEGER) - (b.market_cap_rank ?? Number.MAX_SAFE_INTEGER))
+
+  if (exactSymbolMatches.length > 0) {
+    return exactSymbolMatches[0]
+  }
+
+  return coins[0] ?? null
+}
+
+const parseJinaJsonPayload = async (response) => {
+  const text = await response.text()
+  const jsonStart = text.indexOf('{')
+  const jsonEnd = text.lastIndexOf('}')
+
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd < jsonStart) {
+    throw new Error('Malformed quote response')
+  }
+
+  return JSON.parse(text.slice(jsonStart, jsonEnd + 1))
+}
+
+const fetchWithTimeout = async (url, timeoutMs = 8000) => {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    return await fetch(url, { signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
+const fetchYahooChartData = async (ticker) => {
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`
+
+  try {
+    const jinaResponse = await fetchWithTimeout(
+      `https://r.jina.ai/http://${yahooUrl.replace(/^https?:\/\//, '')}`
+    )
+
+    if (!jinaResponse.ok) {
+      throw new Error('Jina request failed')
+    }
+
+    return parseJinaJsonPayload(jinaResponse)
+  } catch (jinaError) {
+    const allOriginsResponse = await fetchWithTimeout(
+      `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`
+    )
+
+    if (!allOriginsResponse.ok) {
+      throw jinaError
+    }
+
+    const payload = await allOriginsResponse.json()
+
+    if (!payload?.contents) {
+      throw new Error('AllOrigins payload missing contents')
+    }
+
+    return JSON.parse(payload.contents)
+  }
+}
+
+const isPriceAlignedToTick = (value, tickSize) => {
+  const roundedToTick = Math.round(value / tickSize) * tickSize
+  return Math.abs(roundedToTick - value) < tickSize / 1000
+}
+
 function App() {
   const { user, loading, logout } = useAuth()
   const [assetType, setAssetType] = useState('crypto')
@@ -70,20 +157,32 @@ function App() {
   const [equityAccountCurrency, setEquityAccountCurrency] = useState('USD')
   const [assetCurrency, setAssetCurrency] = useState('USD')
   const [stockTicker, setStockTicker] = useState('')
+  const [futuresEquity, setFuturesEquity] = useState('')
+  const [futuresRiskPercent, setFuturesRiskPercent] = useState('')
+  const [futuresEntryPrice, setFuturesEntryPrice] = useState('')
+  const [futuresStopPrice, setFuturesStopPrice] = useState('')
+  const [futuresTargetPrice, setFuturesTargetPrice] = useState('')
+  const [futuresAccountCurrency, setFuturesAccountCurrency] = useState('USD')
+  const [futuresContractCode, setFuturesContractCode] = useState('ES')
+
+  const isCrypto = assetType === 'crypto'
+  const isEquity = assetType === 'equity'
+  const isFutures = assetType === 'futures'
+  const activeFuturesContract = FUTURES_CONTRACTS_BY_CODE.get(futuresContractCode) ?? FUTURES_CONTRACTS[0]
 
   // Derived state based on current asset type
-  const equity = assetType === 'crypto' ? cryptoEquity : equityEquity
-  const setEquity = assetType === 'crypto' ? setCryptoEquity : setEquityEquity
-  const riskPercent = assetType === 'crypto' ? cryptoRiskPercent : equityRiskPercent
-  const setRiskPercent = assetType === 'crypto' ? setCryptoRiskPercent : setEquityRiskPercent
-  const entryPrice = assetType === 'crypto' ? cryptoEntryPrice : equityEntryPrice
-  const setEntryPrice = assetType === 'crypto' ? setCryptoEntryPrice : setEquityEntryPrice
-  const stopPrice = assetType === 'crypto' ? cryptoStopPrice : equityStopPrice
-  const setStopPrice = assetType === 'crypto' ? setCryptoStopPrice : setEquityStopPrice
-  const targetPrice = assetType === 'crypto' ? cryptoTargetPrice : equityTargetPrice
-  const setTargetPrice = assetType === 'crypto' ? setCryptoTargetPrice : setEquityTargetPrice
-  const accountCurrency = assetType === 'crypto' ? cryptoAccountCurrency : equityAccountCurrency
-  const setAccountCurrency = assetType === 'crypto' ? setCryptoAccountCurrency : setEquityAccountCurrency
+  const equity = isCrypto ? cryptoEquity : isEquity ? equityEquity : futuresEquity
+  const setEquity = isCrypto ? setCryptoEquity : isEquity ? setEquityEquity : setFuturesEquity
+  const riskPercent = isCrypto ? cryptoRiskPercent : isEquity ? equityRiskPercent : futuresRiskPercent
+  const setRiskPercent = isCrypto ? setCryptoRiskPercent : isEquity ? setEquityRiskPercent : setFuturesRiskPercent
+  const entryPrice = isCrypto ? cryptoEntryPrice : isEquity ? equityEntryPrice : futuresEntryPrice
+  const setEntryPrice = isCrypto ? setCryptoEntryPrice : isEquity ? setEquityEntryPrice : setFuturesEntryPrice
+  const stopPrice = isCrypto ? cryptoStopPrice : isEquity ? equityStopPrice : futuresStopPrice
+  const setStopPrice = isCrypto ? setCryptoStopPrice : isEquity ? setEquityStopPrice : setFuturesStopPrice
+  const targetPrice = isCrypto ? cryptoTargetPrice : isEquity ? equityTargetPrice : futuresTargetPrice
+  const setTargetPrice = isCrypto ? setCryptoTargetPrice : isEquity ? setEquityTargetPrice : setFuturesTargetPrice
+  const accountCurrency = isCrypto ? cryptoAccountCurrency : isEquity ? equityAccountCurrency : futuresAccountCurrency
+  const setAccountCurrency = isCrypto ? setCryptoAccountCurrency : isEquity ? setEquityAccountCurrency : setFuturesAccountCurrency
   const [exchangeRate, setExchangeRate] = useState('')
   const [rateLoading, setRateLoading] = useState(false)
   const [rateError, setRateError] = useState(null)
@@ -91,20 +190,15 @@ function App() {
   const [priceLoading, setPriceLoading] = useState(false)
   const [priceError, setPriceError] = useState(null)
   const [fetchedPrice, setFetchedPrice] = useState(null)
+  const [isTrackingLiveFuturesEntry, setIsTrackingLiveFuturesEntry] = useState(true)
   const [result, setResult] = useState(null)
 
-  // For crypto, we need to convert account currency to the quote currency (e.g., USDC)
-  // For equities, we convert account currency to asset currency (e.g., USD)
-  const getTargetCurrency = () => {
-    if (assetType === 'crypto') {
-      return toFiatCurrency(quoteCurrency)
-    }
-    return assetCurrency
-  }
-
-  const targetCurrency = getTargetCurrency()
+  const displayCurrency = isCrypto ? quoteCurrency : isFutures ? activeFuturesContract.currency : assetCurrency
+  const targetCurrency = isCrypto ? toFiatCurrency(displayCurrency) : displayCurrency
   const accountCurrencyFiat = toFiatCurrency(accountCurrency)
   const needsConversion = accountCurrencyFiat !== targetCurrency
+  const priceInputStep = isFutures ? activeFuturesContract.tickSize : 'any'
+  const futuresPointDecimals = activeFuturesContract.tickSize < 1 ? 2 : 0
 
   const fetchExchangeRate = async (fromCurrency, toCurrency) => {
     if (fromCurrency === toCurrency) {
@@ -144,15 +238,41 @@ function App() {
 
   // Fetch crypto price from CoinGecko
   const fetchCryptoPrice = async () => {
-    const symbol = cryptoSymbol.toUpperCase()
-    const coinId = CRYPTO_IDS[symbol] || symbol.toLowerCase()
+    const symbol = cryptoSymbol.trim().toUpperCase()
+
+    if (!symbol) {
+      setPriceError('Enter a crypto symbol')
+      return
+    }
 
     setPriceLoading(true)
     setPriceError(null)
 
     try {
+      let coinId = resolvedCryptoIds.get(symbol)
+
+      if (!coinId) {
+        const searchResponse = await fetch(
+          `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(symbol)}`
+        )
+
+        if (!searchResponse.ok) {
+          throw new Error('Failed to search for coin')
+        }
+
+        const searchData = await searchResponse.json()
+        const bestMatch = getBestCoinGeckoMatch(searchData.coins ?? [], symbol)
+
+        if (!bestMatch?.id) {
+          throw new Error('Price not found - check symbol')
+        }
+
+        coinId = bestMatch.id
+        resolvedCryptoIds.set(symbol, coinId)
+      }
+
       const response = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`
+        `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(coinId)}&vs_currencies=usd`
       )
 
       if (!response.ok) {
@@ -176,9 +296,11 @@ function App() {
     }
   }
 
-  // Fetch stock price from Yahoo Finance via CORS proxy
+  // Fetch stock price from Yahoo Finance via a browser-safe reader endpoint
   const fetchStockPrice = async () => {
-    if (!stockTicker) {
+    const ticker = stockTicker.trim().toUpperCase()
+
+    if (!ticker) {
       setPriceError('Enter a ticker symbol')
       return
     }
@@ -187,15 +309,7 @@ function App() {
     setPriceError(null)
 
     try {
-      // Using Yahoo Finance chart API via CORS proxy
-      const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${stockTicker.toUpperCase()}?interval=1d&range=1d`
-      const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`)
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch price')
-      }
-
-      const data = await response.json()
+      const data = await fetchYahooChartData(ticker)
       const price = data.chart?.result?.[0]?.meta?.regularMarketPrice
 
       if (price) {
@@ -217,11 +331,38 @@ function App() {
     }
   }
 
+  const fetchFuturesPrice = useCallback(async ({ updateEntry = true } = {}) => {
+    setPriceLoading(true)
+    setPriceError(null)
+
+    try {
+      const data = await fetchYahooChartData(activeFuturesContract.yahooSymbol)
+      const price = data.chart?.result?.[0]?.meta?.regularMarketPrice
+
+      if (price) {
+        if (updateEntry) {
+          setEntryPrice(price.toString())
+        }
+        setFetchedPrice(price)
+      } else {
+        throw new Error('Price not found for contract')
+      }
+    } catch (err) {
+      setPriceError(`Could not fetch ${activeFuturesContract.code} price`)
+      console.error('Futures price fetch error:', err)
+    } finally {
+      setPriceLoading(false)
+    }
+  }, [activeFuturesContract, setEntryPrice])
+
   const fetchPrice = () => {
-    if (assetType === 'crypto') {
+    if (isCrypto) {
       fetchCryptoPrice()
-    } else {
+    } else if (isEquity) {
       fetchStockPrice()
+    } else {
+      setIsTrackingLiveFuturesEntry(true)
+      fetchFuturesPrice()
     }
   }
 
@@ -235,9 +376,44 @@ function App() {
   useEffect(() => {
     setFetchedPrice(null)
     setPriceError(null)
-  }, [cryptoSymbol, stockTicker, assetType])
+  }, [cryptoSymbol, stockTicker, futuresContractCode, assetType])
 
-  const calculatePositionSize = () => {
+  useEffect(() => {
+    if (isFutures) {
+      setIsTrackingLiveFuturesEntry(true)
+      fetchFuturesPrice()
+    }
+  }, [fetchFuturesPrice, futuresContractCode, isFutures])
+
+  useEffect(() => {
+    if (!isFutures || !isTrackingLiveFuturesEntry) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      fetchFuturesPrice()
+    }, 15000)
+
+    return () => window.clearInterval(intervalId)
+  }, [fetchFuturesPrice, isFutures, isTrackingLiveFuturesEntry])
+
+  const handleStockTickerBlur = () => {
+    if (!stockTicker.trim() || priceLoading) {
+      return
+    }
+
+    fetchStockPrice()
+  }
+
+  const handleEntryPriceChange = (value) => {
+    if (isFutures) {
+      setIsTrackingLiveFuturesEntry(false)
+    }
+
+    setEntryPrice(value)
+  }
+
+  const calculatePositionSize = useCallback(() => {
     const equityVal = parseFloat(equity)
     const riskVal = parseFloat(riskPercent)
     const entryVal = parseFloat(entryPrice)
@@ -289,6 +465,23 @@ function App() {
       return
     }
 
+    if (isFutures) {
+      const invalidPriceLabel = hasTarget && !isPriceAlignedToTick(targetVal, activeFuturesContract.tickSize)
+        ? 'target'
+        : !isPriceAlignedToTick(entryVal, activeFuturesContract.tickSize)
+          ? 'entry'
+          : !isPriceAlignedToTick(stopVal, activeFuturesContract.tickSize)
+            ? 'stop'
+            : null
+
+      if (invalidPriceLabel) {
+        setResult({
+          error: `${activeFuturesContract.code} prices must align to ${activeFuturesContract.tickSize} point ticks (${invalidPriceLabel} price is off tick)`,
+        })
+        return
+      }
+    }
+
     // Risk amount in account currency
     const riskAmountAccount = equityVal * (riskVal / 100)
 
@@ -296,7 +489,49 @@ function App() {
     const effectiveRate = needsConversion ? rateVal : 1
     const riskAmountTarget = riskAmountAccount * effectiveRate
 
-    const riskPerUnit = Math.abs(entryVal - stopVal)
+    const stopDistance = Math.abs(entryVal - stopVal)
+
+    if (isFutures) {
+      const riskPerContract = stopDistance * activeFuturesContract.pointValue
+      const positionSizeExact = riskAmountTarget / riskPerContract
+      const positionSize = Math.floor(positionSizeExact)
+      const positionValue = positionSize * entryVal * activeFuturesContract.pointValue
+      const actualRiskTarget = positionSize * riskPerContract
+      const actualRiskAccount = actualRiskTarget / effectiveRate
+      const maxStopDistance = Math.floor(
+        (riskAmountTarget / activeFuturesContract.pointValue) / activeFuturesContract.tickSize
+      ) * activeFuturesContract.tickSize
+
+      let profitAmount = null
+      let profitAmountAccount = null
+      let rFactor = null
+
+      if (hasTarget) {
+        const profitPerContract = Math.abs(targetVal - entryVal) * activeFuturesContract.pointValue
+        profitAmount = positionSize * profitPerContract
+        profitAmountAccount = profitAmount / effectiveRate
+        rFactor = profitPerContract / riskPerContract
+      }
+
+      setResult({
+        positionSize,
+        positionSizeExact,
+        positionValue,
+        riskAmountAccount,
+        riskAmountTarget,
+        riskPerUnit: riskPerContract,
+        stopDistance,
+        actualRiskTarget,
+        actualRiskAccount,
+        maxStopDistance,
+        profitAmount,
+        profitAmountAccount,
+        rFactor,
+      })
+      return
+    }
+
+    const riskPerUnit = stopDistance
     const positionSize = riskAmountTarget / riskPerUnit
     const positionValue = positionSize * entryVal
 
@@ -322,22 +557,35 @@ function App() {
       profitAmountAccount: profitAmountAccount,
       rFactor: rFactor,
     })
-  }
+  }, [
+    activeFuturesContract,
+    entryPrice,
+    equity,
+    exchangeRate,
+    isFutures,
+    needsConversion,
+    riskPercent,
+    stopPrice,
+    targetPrice,
+    tradeDirection,
+  ])
 
   useEffect(() => {
     calculatePositionSize()
-  }, [cryptoEquity, equityEquity, cryptoRiskPercent, equityRiskPercent, cryptoEntryPrice, cryptoStopPrice, cryptoTargetPrice, equityEntryPrice, equityStopPrice, equityTargetPrice, cryptoAccountCurrency, equityAccountCurrency, assetCurrency, quoteCurrency, exchangeRate, assetType, tradeDirection])
+  }, [calculatePositionSize])
 
   const formatNumber = (num, decimals = 2) => {
-    if (assetType === 'crypto') {
-      return num.toLocaleString(undefined, {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: 8
-      })
-    }
     return num.toLocaleString(undefined, {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals
+    })
+  }
+
+  // Format crypto quantity with more precision
+  const formatCryptoQty = (num) => {
+    return num.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 8
     })
   }
 
@@ -346,10 +594,6 @@ function App() {
       hour: '2-digit',
       minute: '2-digit'
     })
-  }
-
-  const getDisplayQuoteCurrency = () => {
-    return assetType === 'crypto' ? quoteCurrency : assetCurrency
   }
 
   // Show loading spinner while checking auth
@@ -392,16 +636,22 @@ function App() {
             <label>Asset Type</label>
             <div className="toggle-buttons">
               <button
-                className={assetType === 'crypto' ? 'active' : ''}
+                className={isCrypto ? 'active' : ''}
                 onClick={() => setAssetType('crypto')}
               >
                 Crypto
               </button>
               <button
-                className={assetType === 'equity' ? 'active' : ''}
+                className={isEquity ? 'active' : ''}
                 onClick={() => setAssetType('equity')}
               >
                 Equity
+              </button>
+              <button
+                className={isFutures ? 'active' : ''}
+                onClick={() => setAssetType('futures')}
+              >
+                Futures
               </button>
             </div>
           </div>
@@ -445,7 +695,7 @@ function App() {
               value={accountCurrency}
               onChange={(e) => setAccountCurrency(e.target.value)}
             >
-              {(assetType === 'crypto' ? CRYPTO_ACCOUNT_CURRENCIES : FIAT_CURRENCIES).map(c => (
+              {(isCrypto ? CRYPTO_ACCOUNT_CURRENCIES : FIAT_CURRENCIES).map(c => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
@@ -464,9 +714,21 @@ function App() {
             max="100"
             step="any"
           />
+          <div className="preset-buttons">
+            {RISK_PERCENT_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={`preset-btn ${riskPercent === preset.toString() ? 'active' : ''}`}
+                onClick={() => setRiskPercent(preset.toString())}
+              >
+                {preset}%
+              </button>
+            ))}
+          </div>
         </div>
 
-        {assetType === 'crypto' ? (
+        {isCrypto ? (
           <div className="input-row">
             <div className="input-group flex-grow">
               <label htmlFor="cryptoSymbol">Asset Symbol</label>
@@ -491,7 +753,7 @@ function App() {
               </select>
             </div>
           </div>
-        ) : (
+        ) : isEquity ? (
           <div className="input-group">
             <label htmlFor="stockTicker">Stock Ticker</label>
             <input
@@ -500,14 +762,35 @@ function App() {
               placeholder="e.g. AAPL, TSLA, IBIT"
               value={stockTicker}
               onChange={(e) => setStockTicker(e.target.value.toUpperCase())}
+              onBlur={handleStockTickerBlur}
             />
+          </div>
+        ) : (
+          <div className="input-group">
+            <label htmlFor="futuresContract">Futures Contract</label>
+            <select
+              id="futuresContract"
+              value={futuresContractCode}
+              onChange={(e) => setFuturesContractCode(e.target.value)}
+            >
+              {FUTURES_CONTRACTS.map((contract) => (
+                <option key={contract.code} value={contract.code}>
+                  {contract.code} - {contract.name}
+                </option>
+              ))}
+            </select>
+            <div className="contract-meta">
+              <span>{activeFuturesContract.name}</span>
+              <span>{displayCurrency} {formatNumber(activeFuturesContract.pointValue)} / point</span>
+              <span>{activeFuturesContract.tickSize} tick ({displayCurrency} {formatNumber(activeFuturesContract.tickValue)})</span>
+            </div>
           </div>
         )}
 
         <div className="input-group">
           <div className="price-header">
             <label htmlFor="entry">
-              Entry Price {assetType === 'crypto' ? `(${quoteCurrency})` : assetCurrency ? `(${assetCurrency})` : ''}
+              Entry Price {displayCurrency ? `(${displayCurrency})` : ''}
             </label>
             <button
               className="fetch-price-btn"
@@ -523,7 +806,7 @@ function App() {
                     <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
                     <path d="M21 3v5h-5" />
                   </svg>
-                  Fetch ({assetType === 'crypto' ? 'CoinGecko' : 'Yahoo'})
+                  Fetch ({isCrypto ? 'CoinGecko' : 'Yahoo'})
                 </>
               )}
             </button>
@@ -534,12 +817,12 @@ function App() {
               type="number"
               placeholder={fetchedPrice ? `Current: ${fetchedPrice}` : 'e.g. 88000'}
               value={entryPrice}
-              onChange={(e) => setEntryPrice(e.target.value)}
+              onChange={(e) => handleEntryPriceChange(e.target.value)}
               min="0"
-              step="any"
+              step={priceInputStep}
               className="flex-grow"
             />
-            {assetType === 'equity' && (
+            {isEquity && (
               <div className="input-group currency-select" style={{ marginBottom: 0 }}>
                 <select
                   id="assetCurrency"
@@ -553,12 +836,19 @@ function App() {
               </div>
             )}
           </div>
+          {isFutures && (
+            <span className="price-hint">
+              {isTrackingLiveFuturesEntry
+                ? 'Tracking live futures price every 15 seconds'
+                : 'Live price tracking paused while you use a custom entry. Press Fetch to resume.'}
+            </span>
+          )}
           {priceError && <span className="price-error">{priceError}</span>}
         </div>
 
         <div className="input-group">
           <label htmlFor="stop">
-            Stop Loss Price ({getDisplayQuoteCurrency()})
+            Stop Loss Price ({displayCurrency})
           </label>
           <input
             id="stop"
@@ -567,13 +857,13 @@ function App() {
             value={stopPrice}
             onChange={(e) => setStopPrice(e.target.value)}
             min="0"
-            step="any"
+            step={priceInputStep}
           />
         </div>
 
         <div className="input-group">
           <label htmlFor="target">
-            Target Price ({getDisplayQuoteCurrency()}) <span className="optional-label">optional</span>
+            Target Price ({displayCurrency}) <span className="optional-label">optional</span>
           </label>
           <input
             id="target"
@@ -582,7 +872,7 @@ function App() {
             value={targetPrice}
             onChange={(e) => setTargetPrice(e.target.value)}
             min="0"
-            step="any"
+            step={priceInputStep}
           />
           <div className="r-buttons">
             {[1, 2, 3, 5].map((r) => (
@@ -598,9 +888,14 @@ function App() {
                     let target = tradeDirection === 'long'
                       ? entry + (r * riskPerUnit)
                       : entry - (r * riskPerUnit)
-                    // Round to 2 decimals for equity, 8 for crypto
-                    const decimals = assetType === 'crypto' ? 8 : 2
-                    target = Math.round(target * Math.pow(10, decimals)) / Math.pow(10, decimals)
+
+                    if (isFutures) {
+                      target = Math.round(target / activeFuturesContract.tickSize) * activeFuturesContract.tickSize
+                    } else {
+                      const decimals = isCrypto ? 8 : 2
+                      target = Math.round(target * Math.pow(10, decimals)) / Math.pow(10, decimals)
+                    }
+
                     setTargetPrice(target.toString())
                   }
                 }}
@@ -668,13 +963,35 @@ function App() {
                   <div className="result-item highlight">
                     <span className="result-label">Size in {cryptoSymbol || 'Units'}</span>
                     <span className="result-value">
-                      {formatNumber(result.positionSize, 8)} {cryptoSymbol || 'units'}
+                      {formatCryptoQty(result.positionSize)} {cryptoSymbol || 'units'}
                     </span>
                   </div>
                   <div className="result-item highlight-secondary">
                     <span className="result-label">Size in {quoteCurrency}</span>
                     <span className="result-value">
                       {formatNumber(result.positionValue, 2)} {quoteCurrency}
+                    </span>
+                  </div>
+                </>
+              ) : isFutures ? (
+                <>
+                  <div className="result-item highlight">
+                    <span className="result-label">Max Contracts</span>
+                    <span className="result-value">
+                      {formatNumber(result.positionSize, 0)} contracts
+                    </span>
+                    <span className="converted-value">
+                      {result.positionSize > 0 && Math.abs(result.positionSizeExact - result.positionSize) < 0.0001
+                        ? `Raw size ${formatNumber(result.positionSizeExact, 2)} contracts`
+                        : result.positionSize > 0
+                          ? `Raw size ${formatNumber(result.positionSizeExact, 2)} contracts, rounded down to whole contracts`
+                          : `Raw size ${formatNumber(result.positionSizeExact, 2)} contracts, below the minimum 1-contract size`}
+                    </span>
+                  </div>
+                  <div className="result-item highlight-secondary">
+                    <span className="result-label">Notional Value</span>
+                    <span className="result-value">
+                      {displayCurrency} {formatNumber(result.positionValue)}
                     </span>
                   </div>
                 </>
@@ -698,15 +1015,40 @@ function App() {
                   {accountCurrency} {formatNumber(result.riskAmountAccount)}
                   {needsConversion && (
                     <span className="converted-value">
-                      ({getDisplayQuoteCurrency()} {formatNumber(result.riskAmountTarget)})
+                      ({displayCurrency} {formatNumber(result.riskAmountTarget)})
                     </span>
                   )}
                 </span>
               </div>
               <div className="result-item">
-                <span className="result-label">Risk per {assetType === 'crypto' ? cryptoSymbol || 'Unit' : 'Share'}</span>
-                <span className="result-value">{getDisplayQuoteCurrency()} {formatNumber(result.riskPerUnit, assetType === 'crypto' ? 2 : 2)}</span>
+                <span className="result-label">
+                  {isFutures ? 'Risk per Contract' : `Risk per ${isCrypto ? cryptoSymbol || 'Unit' : 'Share'}`}
+                </span>
+                <span className="result-value">{displayCurrency} {formatNumber(result.riskPerUnit)}</span>
               </div>
+              {isFutures && (
+                <>
+                  <div className="result-item">
+                    <span className="result-label">Stop Distance</span>
+                    <span className="result-value">{formatNumber(result.stopDistance, futuresPointDecimals)} points</span>
+                  </div>
+                  <div className="result-item">
+                    <span className="result-label">Max 1-Contract Stop</span>
+                    <span className="result-value">{formatNumber(result.maxStopDistance, futuresPointDecimals)} points</span>
+                  </div>
+                  <div className="result-item">
+                    <span className="result-label">Actual Risk</span>
+                    <span className="result-value">
+                      {accountCurrency} {formatNumber(result.actualRiskAccount)}
+                      {needsConversion && (
+                        <span className="converted-value">
+                          ({displayCurrency} {formatNumber(result.actualRiskTarget)})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </>
+              )}
               {result.profitAmount !== null && (
                 <>
                   <div className="result-item profit">
@@ -715,7 +1057,7 @@ function App() {
                       +{accountCurrency} {formatNumber(needsConversion ? result.profitAmountAccount : result.profitAmount)}
                       {needsConversion && (
                         <span className="converted-value">
-                          ({getDisplayQuoteCurrency()} {formatNumber(result.profitAmount)})
+                          ({displayCurrency} {formatNumber(result.profitAmount)})
                         </span>
                       )}
                     </span>
@@ -740,7 +1082,11 @@ function App() {
 
         <div className="formula">
           <h3>Formula</h3>
-          <code>Size = (Equity × Risk% × Rate) / |Entry - Stop|</code>
+          <code>
+            {isFutures
+              ? 'Contracts = (Equity × Risk% × Rate) / (|Entry - Stop| × $/point)'
+              : 'Size = (Equity × Risk% × Rate) / |Entry - Stop|'}
+          </code>
         </div>
       </main>
 
