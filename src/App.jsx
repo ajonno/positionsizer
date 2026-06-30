@@ -138,9 +138,11 @@ function App() {
   const [assetType, setAssetType] = useState('crypto')
   const [tradeDirection, setTradeDirection] = useState('long')
 
+  // Shared across Crypto/Equity/Futures tabs (account-level, not asset-specific)
+  const [equity, setEquity] = useState('')
+  const [riskPercent, setRiskPercent] = useState('')
+
   // Separate state for crypto
-  const [cryptoEquity, setCryptoEquity] = useState('')
-  const [cryptoRiskPercent, setCryptoRiskPercent] = useState('')
   const [cryptoEntryPrice, setCryptoEntryPrice] = useState('')
   const [cryptoStopPrice, setCryptoStopPrice] = useState('')
   const [cryptoTargetPrice, setCryptoTargetPrice] = useState('')
@@ -149,16 +151,12 @@ function App() {
   const [quoteCurrency, setQuoteCurrency] = useState('USDC')
 
   // Separate state for equity
-  const [equityEquity, setEquityEquity] = useState('')
-  const [equityRiskPercent, setEquityRiskPercent] = useState('')
   const [equityEntryPrice, setEquityEntryPrice] = useState('')
   const [equityStopPrice, setEquityStopPrice] = useState('')
   const [equityTargetPrice, setEquityTargetPrice] = useState('')
   const [equityAccountCurrency, setEquityAccountCurrency] = useState('USD')
   const [assetCurrency, setAssetCurrency] = useState('USD')
   const [stockTicker, setStockTicker] = useState('')
-  const [futuresEquity, setFuturesEquity] = useState('')
-  const [futuresRiskPercent, setFuturesRiskPercent] = useState('')
   const [futuresEntryPrice, setFuturesEntryPrice] = useState('')
   const [futuresStopPrice, setFuturesStopPrice] = useState('')
   const [futuresTargetPrice, setFuturesTargetPrice] = useState('')
@@ -170,11 +168,7 @@ function App() {
   const isFutures = assetType === 'futures'
   const activeFuturesContract = FUTURES_CONTRACTS_BY_CODE.get(futuresContractCode) ?? FUTURES_CONTRACTS[0]
 
-  // Derived state based on current asset type
-  const equity = isCrypto ? cryptoEquity : isEquity ? equityEquity : futuresEquity
-  const setEquity = isCrypto ? setCryptoEquity : isEquity ? setEquityEquity : setFuturesEquity
-  const riskPercent = isCrypto ? cryptoRiskPercent : isEquity ? equityRiskPercent : futuresRiskPercent
-  const setRiskPercent = isCrypto ? setCryptoRiskPercent : isEquity ? setEquityRiskPercent : setFuturesRiskPercent
+  // Derived state based on current asset type (prices/symbols stay per-asset)
   const entryPrice = isCrypto ? cryptoEntryPrice : isEquity ? equityEntryPrice : futuresEntryPrice
   const setEntryPrice = isCrypto ? setCryptoEntryPrice : isEquity ? setEquityEntryPrice : setFuturesEntryPrice
   const stopPrice = isCrypto ? cryptoStopPrice : isEquity ? equityStopPrice : futuresStopPrice
