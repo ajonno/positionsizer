@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import './App.css'
 import { useAuth } from './auth-context'
 import LoginPage from './LoginPage'
+
+const PortfolioDashboard = lazy(() => import('./portfolio/PortfolioDashboard'))
 
 const FIAT_CURRENCIES = ['USD', 'AUD', 'EUR', 'GBP', 'CAD', 'JPY', 'CHF', 'NZD']
 const CRYPTO_ACCOUNT_CURRENCIES = ['USDC', 'USDT', 'USD', 'AUD', 'EUR', 'GBP']
@@ -135,6 +137,7 @@ const isPriceAlignedToTick = (value, tickSize) => {
 
 function App() {
   const { user, loading, logout } = useAuth()
+  const [activeView, setActiveView] = useState('calculator')
   const [assetType, setAssetType] = useState('crypto')
   const [tradeDirection, setTradeDirection] = useState('long')
 
@@ -168,6 +171,7 @@ function App() {
   const isCrypto = assetType === 'crypto'
   const isEquity = assetType === 'equity'
   const isFutures = assetType === 'futures'
+  const isDashboard = activeView === 'dashboard'
   const activeFuturesContract = FUTURES_CONTRACTS_BY_CODE.get(futuresContractCode) ?? FUTURES_CONTRACTS[0]
 
   // Derived state based on current asset type
@@ -619,6 +623,22 @@ function App() {
           <div>
             <h1>Position Sizer</h1>
             <p className="subtitle">Signed in as {user.email}</p>
+            <nav className="app-tabs" aria-label="Primary views">
+              <button
+                type="button"
+                className={activeView === 'calculator' ? 'active' : ''}
+                onClick={() => setActiveView('calculator')}
+              >
+                Calculator
+              </button>
+              <button
+                type="button"
+                className={isDashboard ? 'active' : ''}
+                onClick={() => setActiveView('dashboard')}
+              >
+                Dashboard
+              </button>
+            </nav>
           </div>
           <button className="logout-btn" onClick={logout} title="Sign out">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -630,6 +650,13 @@ function App() {
         </div>
       </header>
 
+      {isDashboard ? (
+        <main className="portfolio-dashboard">
+          <Suspense fallback={<div className="treemap-loading">Loading dashboard...</div>}>
+            <PortfolioDashboard />
+          </Suspense>
+        </main>
+      ) : (
       <main className="calculator">
         <div className="toggle-group">
           <div className="toggle-section">
@@ -1089,6 +1116,7 @@ function App() {
           </code>
         </div>
       </main>
+      )}
 
       <footer className="footer">
         <p>Works offline - Install as app for best experience</p>
