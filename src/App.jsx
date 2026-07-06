@@ -18,6 +18,12 @@ const FUTURES_CONTRACTS = [
   { code: 'MYM', name: 'Micro E-mini Dow', yahooSymbol: 'MYM=F', pointValue: 0.5, tickSize: 1, tickValue: 0.5, currency: 'USD' },
   { code: 'RTY', name: 'E-mini Russell 2000', yahooSymbol: 'RTY=F', pointValue: 50, tickSize: 0.1, tickValue: 5, currency: 'USD' },
   { code: 'M2K', name: 'Micro E-mini Russell 2000', yahooSymbol: 'M2K=F', pointValue: 5, tickSize: 0.1, tickValue: 0.5, currency: 'USD' },
+  // Coinbase Derivatives perpetual-style futures are quoted against a USD spot
+  // index; Yahoo has no CDE symbols, so spot is fetched as a close proxy
+  // (funding keeps the perp within a small basis of spot).
+  { code: 'BIP', name: 'Nano Bitcoin Perp (Coinbase)', yahooSymbol: 'BTC-USD', priceSourceNote: 'BTC-USD spot index proxy', pointValue: 0.01, tickSize: 5, tickValue: 0.05, currency: 'USD' },
+  { code: 'ETP', name: 'Nano Ether Perp (Coinbase)', yahooSymbol: 'ETH-USD', priceSourceNote: 'ETH-USD spot index proxy', pointValue: 0.1, tickSize: 0.5, tickValue: 0.05, currency: 'USD' },
+  { code: '1OZ', name: '1-Ounce Gold', yahooSymbol: '1OZ=F', pointValue: 1, tickSize: 0.25, tickValue: 0.25, currency: 'USD' },
 ]
 const FUTURES_CONTRACTS_BY_CODE = new Map(FUTURES_CONTRACTS.map((contract) => [contract.code, contract]))
 
@@ -133,6 +139,14 @@ const fetchYahooChartData = async (ticker) => {
 const isPriceAlignedToTick = (value, tickSize) => {
   const roundedToTick = Math.round(value / tickSize) * tickSize
   return Math.abs(roundedToTick - value) < tickSize / 1000
+}
+
+// Snap a fetched price to the contract's tick grid. Needed for contracts whose
+// live price is a spot-index proxy (BIP/ETP) — spot rarely lands on the perp's
+// tick — and harmless for prices that are already aligned.
+const snapPriceToTick = (value, tickSize) => {
+  const tickDecimals = (String(tickSize).split('.')[1] || '').length
+  return Number((Math.round(value / tickSize) * tickSize).toFixed(tickDecimals))
 }
 
 function App() {
@@ -341,9 +355,11 @@ function App() {
 
     try {
       const data = await fetchYahooChartData(activeFuturesContract.yahooSymbol)
-      const price = data.chart?.result?.[0]?.meta?.regularMarketPrice
+      const rawPrice = data.chart?.result?.[0]?.meta?.regularMarketPrice
 
-      if (price) {
+      if (rawPrice) {
+        const price = snapPriceToTick(rawPrice, activeFuturesContract.tickSize)
+
         if (updateEntry) {
           setEntryPrice(price.toString())
         }
@@ -810,6 +826,9 @@ function App() {
               <span>{activeFuturesContract.name}</span>
               <span>{displayCurrency} {formatNumber(activeFuturesContract.pointValue)} / point</span>
               <span>{activeFuturesContract.tickSize} tick ({displayCurrency} {formatNumber(activeFuturesContract.tickValue)})</span>
+              {activeFuturesContract.priceSourceNote && (
+                <span>Live price via {activeFuturesContract.priceSourceNote}</span>
+              )}
             </div>
           </div>
         )}
