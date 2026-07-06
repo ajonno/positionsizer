@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { useAuth } from './auth-context'
 import LoginPage from './LoginPage'
+
+const PortfolioDashboard = lazy(() => import('./portfolio/PortfolioDashboard'))
 
 const FIAT_CURRENCIES = ['USD', 'AUD', 'EUR', 'GBP', 'CAD', 'JPY', 'CHF', 'NZD']
 const CRYPTO_ACCOUNT_CURRENCIES = ['USDC', 'USDT', 'USD', 'AUD', 'EUR', 'GBP']
@@ -16,6 +18,12 @@ const FUTURES_CONTRACTS = [
   { code: 'MYM', name: 'Micro E-mini Dow', yahooSymbol: 'MYM=F', pointValue: 0.5, tickSize: 1, tickValue: 0.5, currency: 'USD' },
   { code: 'RTY', name: 'E-mini Russell 2000', yahooSymbol: 'RTY=F', pointValue: 50, tickSize: 0.1, tickValue: 5, currency: 'USD' },
   { code: 'M2K', name: 'Micro E-mini Russell 2000', yahooSymbol: 'M2K=F', pointValue: 5, tickSize: 0.1, tickValue: 0.5, currency: 'USD' },
+  // Coinbase Derivatives perpetual-style futures are quoted against a USD spot
+  // index; Yahoo has no CDE symbols, so spot is fetched as a close proxy
+  // (funding keeps the perp within a small basis of spot).
+  { code: 'BIP', name: 'Nano Bitcoin Perp (Coinbase)', yahooSymbol: 'BTC-USD', priceSourceNote: 'BTC-USD spot index proxy', pointValue: 0.01, tickSize: 5, tickValue: 0.05, currency: 'USD' },
+  { code: 'ETP', name: 'Nano Ether Perp (Coinbase)', yahooSymbol: 'ETH-USD', priceSourceNote: 'ETH-USD spot index proxy', pointValue: 0.1, tickSize: 0.5, tickValue: 0.05, currency: 'USD' },
+  { code: '1OZ', name: '1-Ounce Gold', yahooSymbol: '1OZ=F', pointValue: 1, tickSize: 0.25, tickValue: 0.25, currency: 'USD' },
 ]
 const FUTURES_CONTRACTS_BY_CODE = new Map(FUTURES_CONTRACTS.map((contract) => [contract.code, contract]))
 
@@ -128,13 +136,59 @@ const fetchYahooChartData = async (ticker) => {
   }
 }
 
+// FX rate with fallback: Frankfurter (ECB rates, daily) first, then
+// open.er-api.com. The old api.frankfurter.app host now 301-redirects and
+// breaks fetch, so we target the current api.frankfurter.dev/v1 endpoint.
+const fetchFxRate = async (fromCurrency, toCurrency) => {
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.frankfurter.dev/v1/latest?base=${fromCurrency}&symbols=${toCurrency}`
+    )
+
+    if (response.ok) {
+      const data = await response.json()
+      const rate = data?.rates?.[toCurrency]
+
+      if (typeof rate === 'number' && rate > 0) {
+        return rate
+      }
+    }
+  } catch (err) {
+    console.warn('Frankfurter FX fetch failed, trying fallback:', err)
+  }
+
+  const response = await fetchWithTimeout(`https://open.er-api.com/v6/latest/${fromCurrency}`)
+
+  if (!response.ok) {
+    throw new Error('FX rate request failed')
+  }
+
+  const data = await response.json()
+  const rate = data?.rates?.[toCurrency]
+
+  if (typeof rate === 'number' && rate > 0) {
+    return rate
+  }
+
+  throw new Error('Rate not found')
+}
+
 const isPriceAlignedToTick = (value, tickSize) => {
   const roundedToTick = Math.round(value / tickSize) * tickSize
   return Math.abs(roundedToTick - value) < tickSize / 1000
 }
 
+// Snap a fetched price to the contract's tick grid. Needed for contracts whose
+// live price is a spot-index proxy (BIP/ETP) — spot rarely lands on the perp's
+// tick — and harmless for prices that are already aligned.
+const snapPriceToTick = (value, tickSize) => {
+  const tickDecimals = (String(tickSize).split('.')[1] || '').length
+  return Number((Math.round(value / tickSize) * tickSize).toFixed(tickDecimals))
+}
+
 function App() {
   const { user, loading, logout } = useAuth()
+  const [activeView, setActiveView] = useState('calculator')
   const [assetType, setAssetType] = useState('crypto')
   const [tradeDirection, setTradeDirection] = useState('long')
 
@@ -168,6 +222,7 @@ function App() {
   const isCrypto = assetType === 'crypto'
   const isEquity = assetType === 'equity'
   const isFutures = assetType === 'futures'
+  const isDashboard = activeView === 'dashboard'
   const activeFuturesContract = FUTURES_CONTRACTS_BY_CODE.get(futuresContractCode) ?? FUTURES_CONTRACTS[0]
 
   // Derived state based on current asset type
@@ -184,6 +239,7 @@ function App() {
   const accountCurrency = isCrypto ? cryptoAccountCurrency : isEquity ? equityAccountCurrency : futuresAccountCurrency
   const setAccountCurrency = isCrypto ? setCryptoAccountCurrency : isEquity ? setEquityAccountCurrency : setFuturesAccountCurrency
   const [exchangeRate, setExchangeRate] = useState('')
+  const rateRequestIdRef = useRef(0)
   const [rateLoading, setRateLoading] = useState(false)
   const [rateError, setRateError] = useState(null)
   const [rateLastUpdated, setRateLastUpdated] = useState(null)
@@ -201,38 +257,42 @@ function App() {
   const futuresPointDecimals = activeFuturesContract.tickSize < 1 ? 2 : 0
 
   const fetchExchangeRate = async (fromCurrency, toCurrency) => {
+    const requestId = ++rateRequestIdRef.current
+
     if (fromCurrency === toCurrency) {
       setExchangeRate('1')
       setRateLastUpdated(null)
+      setRateError(null)
       return
     }
 
     setRateLoading(true)
     setRateError(null)
+    // Clear the previous pair's rate so the calculator suppresses results
+    // (instead of silently sizing with a stale rate) until this fetch lands.
+    setExchangeRate('')
 
     try {
-      const response = await fetch(
-        `https://api.frankfurter.app/latest?from=${fromCurrency}&to=${toCurrency}`
-      )
+      const rate = await fetchFxRate(fromCurrency, toCurrency)
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch rate')
+      // A newer request (currency changed again) supersedes this one.
+      if (rateRequestIdRef.current !== requestId) {
+        return
       }
 
-      const data = await response.json()
-      const rate = data.rates[toCurrency]
-
-      if (rate) {
-        setExchangeRate(rate.toString())
-        setRateLastUpdated(new Date())
-      } else {
-        throw new Error('Rate not found')
-      }
+      setExchangeRate(rate.toString())
+      setRateLastUpdated(new Date())
     } catch (err) {
-      setRateError('Could not fetch rate')
+      if (rateRequestIdRef.current !== requestId) {
+        return
+      }
+
+      setRateError('Could not fetch rate - enter it manually')
       console.error('Exchange rate fetch error:', err)
     } finally {
-      setRateLoading(false)
+      if (rateRequestIdRef.current === requestId) {
+        setRateLoading(false)
+      }
     }
   }
 
@@ -337,9 +397,11 @@ function App() {
 
     try {
       const data = await fetchYahooChartData(activeFuturesContract.yahooSymbol)
-      const price = data.chart?.result?.[0]?.meta?.regularMarketPrice
+      const rawPrice = data.chart?.result?.[0]?.meta?.regularMarketPrice
 
-      if (price) {
+      if (rawPrice) {
+        const price = snapPriceToTick(rawPrice, activeFuturesContract.tickSize)
+
         if (updateEntry) {
           setEntryPrice(price.toString())
         }
@@ -619,6 +681,22 @@ function App() {
           <div>
             <h1>Position Sizer</h1>
             <p className="subtitle">Signed in as {user.email}</p>
+            <nav className="app-tabs" aria-label="Primary views">
+              <button
+                type="button"
+                className={activeView === 'calculator' ? 'active' : ''}
+                onClick={() => setActiveView('calculator')}
+              >
+                Calculator
+              </button>
+              <button
+                type="button"
+                className={isDashboard ? 'active' : ''}
+                onClick={() => setActiveView('dashboard')}
+              >
+                Dashboard
+              </button>
+            </nav>
           </div>
           <button className="logout-btn" onClick={logout} title="Sign out">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -630,6 +708,13 @@ function App() {
         </div>
       </header>
 
+      {isDashboard ? (
+        <main className="portfolio-dashboard">
+          <Suspense fallback={<div className="treemap-loading">Loading dashboard...</div>}>
+            <PortfolioDashboard />
+          </Suspense>
+        </main>
+      ) : (
       <main className="calculator">
         <div className="toggle-group">
           <div className="toggle-section">
@@ -783,6 +868,9 @@ function App() {
               <span>{activeFuturesContract.name}</span>
               <span>{displayCurrency} {formatNumber(activeFuturesContract.pointValue)} / point</span>
               <span>{activeFuturesContract.tickSize} tick ({displayCurrency} {formatNumber(activeFuturesContract.tickValue)})</span>
+              {activeFuturesContract.priceSourceNote && (
+                <span>Live price via {activeFuturesContract.priceSourceNote}</span>
+              )}
             </div>
           </div>
         )}
@@ -1089,6 +1177,7 @@ function App() {
           </code>
         </div>
       </main>
+      )}
 
       <footer className="footer">
         <p>Works offline - Install as app for best experience</p>

@@ -9,13 +9,25 @@ const ALLOWED_EMAILS = [
   // Add more emails here if needed
 ]
 
+const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+const isLocalDevAuthBypass = import.meta.env.DEV && LOCAL_DEV_HOSTS.has(window.location.hostname)
+const localDevUser = {
+  uid: 'local-dev-user',
+  email: 'local-dev@localhost',
+  displayName: 'Local Dev',
+}
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState(isLocalDevAuthBypass ? localDevUser : null)
+  const [loading, setLoading] = useState(!isLocalDevAuthBypass)
   const [error, setError] = useState(null)
   const deniedDuringSignOutRef = useRef(false)
 
   useEffect(() => {
+    if (isLocalDevAuthBypass) {
+      return undefined
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
       if (nextUser && ALLOWED_EMAILS.length > 0) {
         // Check if user's email is in the allowed list
@@ -48,6 +60,12 @@ export function AuthProvider({ children }) {
   }, [])
 
   const signInWithGoogle = async () => {
+    if (isLocalDevAuthBypass) {
+      setUser(localDevUser)
+      setError(null)
+      return
+    }
+
     try {
       deniedDuringSignOutRef.current = false
       setError(null)
@@ -59,6 +77,12 @@ export function AuthProvider({ children }) {
   }
 
   const logout = async () => {
+    if (isLocalDevAuthBypass) {
+      setUser(localDevUser)
+      setError(null)
+      return
+    }
+
     try {
       deniedDuringSignOutRef.current = false
       setError(null)

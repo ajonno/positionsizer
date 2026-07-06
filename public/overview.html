@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Position Sizer — Risk-first trade sizing</title>
+<meta name="description" content="Position Sizer: a risk-first position sizing calculator and portfolio heatmap for crypto, equities and E-mini futures." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #12121f;
+    --ink-2: #16162a;
+    --panel: #1a1a2e;
+    --panel-2: #16213e;
+    --line: rgba(148, 163, 197, 0.16);
+    --line-strong: rgba(148, 163, 197, 0.32);
+    --text: #e8e9f4;
+    --text-dim: #8d92b3;
+    --long: #22c55e;
+    --short: #f43f5e;
+    --cash: #818cf8;
+    --amber: #f0b429;
+    --serif: "Fraunces", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background:
+      radial-gradient(1200px 700px at 85% -10%, rgba(34, 197, 94, 0.07), transparent 60%),
+      radial-gradient(900px 600px at -10% 30%, rgba(244, 63, 94, 0.055), transparent 55%),
+      radial-gradient(1000px 800px at 50% 110%, rgba(129, 140, 248, 0.06), transparent 60%),
+      var(--ink);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 1.65;
+    overflow-x: hidden;
+  }
+
+  /* film grain */
+  body::after {
+    content: "";
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 60;
+  }
+
+  ::selection { background: rgba(34, 197, 94, 0.35); }
+
+  /* ---------- ticker ---------- */
+  .ticker {
+    border-bottom: 1px solid var(--line);
+    background: rgba(10, 10, 18, 0.7);
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 12.5px;
+    letter-spacing: 0.04em;
+    user-select: none;
+  }
+  .ticker__track {
+    display: inline-block;
+    padding: 9px 0;
+    animation: tick 46s linear infinite;
+  }
+  .ticker__track span { margin: 0 1.4em; color: var(--text-dim); }
+  .ticker__track b { font-weight: 600; color: var(--text); }
+  .up { color: var(--long) !important; }
+  .down { color: var(--short) !important; }
+  @keyframes tick { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+  /* ---------- shell ---------- */
+  .shell { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 88px 0 72px; position: relative; }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--amber);
+    animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .kicker::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--long);
+    box-shadow: 0 0 0 0 rgba(34,197,94,0.6);
+    animation: pulse 2.2s ease-out infinite;
+  }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 9px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+
+  h1 {
+    font-family: var(--serif);
+    font-optical-sizing: auto;
+    font-size: clamp(56px, 9.5vw, 118px);
+    font-weight: 620;
+    line-height: 0.98;
+    letter-spacing: -0.025em;
+    margin: 22px 0 8px;
+    animation: rise 0.8s 0.08s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  h1 em {
+    font-style: italic;
+    font-weight: 430;
+    color: var(--long);
+  }
+  .hero p.lede {
+    max-width: 560px;
+    color: var(--text-dim);
+    font-size: 15.5px;
+    margin-top: 22px;
+    animation: rise 0.8s 0.16s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .hero p.lede b { color: var(--text); font-weight: 500; }
+
+  .asset-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; animation: rise 0.8s 0.24s cubic-bezier(0.2,0.7,0.2,1) both; }
+  .chip {
+    font-size: 12.5px; letter-spacing: 0.08em;
+    border: 1px solid var(--line-strong);
+    padding: 7px 14px; border-radius: 999px;
+    color: var(--text-dim);
+    transition: border-color .25s, color .25s, transform .25s;
+  }
+  .chip:hover { border-color: var(--long); color: var(--text); transform: translateY(-2px); }
+
+  /* formula monument */
+  .formula {
+    margin-top: 54px;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(26,26,46,0.9), rgba(22,33,62,0.55));
+    padding: 34px 38px 30px;
+    position: relative;
+    overflow: hidden;
+    animation: rise 0.9s 0.32s cubic-bezier(0.2,0.7,0.2,1) both;
+  }
+  .formula::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(115deg, transparent 30%, rgba(34,197,94,0.06) 45%, transparent 62%);
+    transform: translateX(-100%);
+    animation: sheen 5.5s 1.4s ease-in-out infinite;
+  }
+  @keyframes sheen { 12% { transform: translateX(100%);} 100% { transform: translateX(100%);} }
+  .formula__label { font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--text-dim); }
+  .formula__math {
+    font-family: var(--serif);
+    font-size: clamp(23px, 4.4vw, 44px);
+    font-weight: 480;
+    letter-spacing: -0.01em;
+    margin-top: 12px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.35em;
+  }
+  .formula__math .frac { display: inline-flex; flex-direction: column; text-align: center; vertical-align: middle; }
+  .formula__math .frac > span:first-child { padding: 0 0.35em 0.08em; }
+  .formula__math .frac > span:last-child { border-top: 2px solid var(--text); padding: 0.08em 0.35em 0; }
+  .formula__math .hl-g { color: var(--long); }
+  .formula__math .hl-r { color: var(--short); }
+  .caret { display: inline-block; width: 0.55em; height: 1.05em; background: var(--long); margin-left: 0.2em; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .formula__note { margin-top: 14px; font-size: 12.5px; color: var(--text-dim); }
+  .formula__note code { color: var(--amber); }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- sections ---------- */
+  section { padding: 78px 0; border-top: 1px solid var(--line); }
+  .sec-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 44px; flex-wrap: wrap; }
+  .sec-index { font-size: 12px; color: var(--amber); letter-spacing: 0.2em; }
+  h2 {
+    font-family: var(--serif);
+    font-size: clamp(30px, 4.4vw, 46px);
+    font-weight: 560;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+  }
+  h2 em { font-style: italic; font-weight: 420; }
+  .sec-sub { flex-basis: 100%; color: var(--text-dim); max-width: 620px; font-size: 14.5px; }
+
+  /* steps */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .step { background: var(--panel); padding: 30px 26px 34px; position: relative; transition: background .3s; }
+  .step:hover { background: var(--panel-2); }
+  .step__num {
+    font-family: var(--serif); font-style: italic; font-size: 54px; font-weight: 350;
+    color: transparent;
+    -webkit-text-stroke: 1px var(--text-dim);
+    line-height: 1;
+  }
+  .step h3 { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 18px 0 8px; }
+  .step p { font-size: 13.5px; color: var(--text-dim); }
+  .step p code { color: var(--long); font-size: 12.5px; }
+
+  /* feature grid */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(26, 26, 46, 0.55);
+    padding: 24px 22px;
+    transition: transform .3s cubic-bezier(0.2,0.7,0.2,1), border-color .3s;
+  }
+  .card:hover { transform: translateY(-4px); border-color: var(--line-strong); }
+  .card__tag { font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--amber); }
+  .card h3 { font-family: var(--serif); font-size: 21px; font-weight: 540; margin: 10px 0 8px; letter-spacing: -0.01em; }
+  .card p { font-size: 13px; color: var(--text-dim); }
+  .card p code { color: var(--text); background: rgba(148,163,197,0.1); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* R buttons homage */
+  .r-row { display: flex; gap: 8px; margin-top: 14px; }
+  .r-pill {
+    border: 1px solid var(--line-strong); border-radius: 6px;
+    padding: 3px 12px; font-size: 12.5px; color: var(--text-dim);
+    transition: all .2s;
+  }
+  .r-pill:hover { color: var(--ink); background: var(--long); border-color: var(--long); }
+
+  /* contracts table */
+  .contracts { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; font-weight: 500; font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--text-dim); padding: 12px 18px; background: rgba(22, 33, 62, 0.6);
+    border-bottom: 1px solid var(--line);
+  }
+  tbody td { padding: 10px 18px; border-bottom: 1px solid var(--line); color: var(--text-dim); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background .2s; }
+  tbody tr:hover { background: rgba(34, 197, 94, 0.05); }
+  tbody td:first-child { color: var(--text); font-weight: 600; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---------- dashboard section ---------- */
+  .dash-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 24px; align-items: start; }
+
+  .balances { display: flex; flex-direction: column; gap: 10px; }
+  .bal {
+    display: flex; justify-content: space-between; align-items: center;
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 18px; background: rgba(26,26,46,0.55);
+    transition: border-color .25s, transform .25s;
+  }
+  .bal:hover { border-color: var(--line-strong); transform: translateX(4px); }
+  .bal__name { font-size: 12.5px; letter-spacing: 0.14em; font-weight: 600; }
+  .bal__name small { display: block; letter-spacing: 0.04em; font-weight: 400; color: var(--text-dim); margin-top: 2px; font-size: 11px; }
+  .bal__amt { color: #60a5fa; font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .bal--on .bal__name::before { content: "●"; color: var(--long); margin-right: 8px; font-size: 9px; vertical-align: 2px; }
+
+  .dash-note { margin-top: 18px; font-size: 12px; color: var(--text-dim); border-left: 2px solid var(--amber); padding-left: 14px; }
+
+  /* CSS treemap */
+  .treemap {
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: var(--panel);
+    padding: 10px;
+    display: grid;
+    grid-template-columns: 1.15fr 1fr 0.72fr;
+    grid-template-rows: 150px 96px 118px;
+    gap: 6px;
+    min-height: 380px;
+  }
+  .tile {
+    border-radius: 7px;
+    padding: 12px 13px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    font-size: 12px;
+    position: relative;
+    overflow: hidden;
+    cursor: crosshair;
+    transition: transform .25s cubic-bezier(0.2,0.7,0.2,1), filter .25s;
+  }
+  .tile:hover { transform: scale(1.03); filter: brightness(1.18); z-index: 2; }
+  .tile b { font-size: 14px; letter-spacing: 0.06em; }
+  .tile span { opacity: 0.85; font-variant-numeric: tabular-nums; font-size: 11.5px; }
+  .tile small { position: absolute; top: 10px; right: 12px; font-size: 9.5px; letter-spacing: 0.14em; opacity: 0.6; }
+  .t-long  { background: linear-gradient(160deg, #1d8a49, #166534); color: #eafff2; }
+  .t-short { background: linear-gradient(160deg, #d13b56, #9f1239); color: #fff0f3; }
+  .t-cash  { background: linear-gradient(160deg, #6d74d8, #4749a8); color: #eef0ff; }
+  .tm-sata  { grid-column: 1; grid-row: 1 / 3; }
+  .tm-cash  { grid-column: 2 / 4; grid-row: 1; }
+  .tm-slv   { grid-column: 2; grid-row: 2 / 4; }
+  .tm-silj  { grid-column: 3; grid-row: 2 / 4; }
+  .tm-pltr  { grid-column: 1; grid-row: 3; }
+
+  .legend { display: flex; gap: 18px; margin-top: 14px; font-size: 11.5px; color: var(--text-dim); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .d-long { background: var(--long); } .d-short { background: var(--short); } .d-cash { background: var(--cash); }
+
+  /* stats strip */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
+  .stat { border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; background: rgba(26,26,46,0.55); }
+  .stat span { font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-dim); }
+  .stat b { display: block; font-size: 21px; font-weight: 600; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .stat b.pos { color: var(--long); } .stat b.neg { color: var(--short); }
+
+  /* ---------- architecture ---------- */
+  .flow {
+    border: 1px solid var(--line-strong); border-radius: 14px;
+    background: linear-gradient(180deg, rgba(26,26,46,0.9), rgba(18,18,31,0.7));
+    padding: 34px;
+    display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 14px; align-items: center;
+  }
+  .node { border: 1px solid var(--line-strong); border-radius: 10px; padding: 18px 16px; text-align: center; background: var(--panel-2); }
+  .node b { display: block; font-size: 13.5px; letter-spacing: 0.06em; }
+  .node span { font-size: 11px; color: var(--text-dim); display: block; margin-top: 6px; line-height: 1.5; }
+  .node--accent { border-color: rgba(34,197,94,0.45); box-shadow: 0 0 26px rgba(34,197,94,0.08); }
+  .arrow { color: var(--long); font-size: 18px; text-align: center; animation: nudge 2.4s ease-in-out infinite; }
+  @keyframes nudge { 50% { transform: translateX(5px); } }
+  .flow-note { grid-column: 1 / -1; font-size: 12px; color: var(--text-dim); border-top: 1px dashed var(--line); padding-top: 16px; margin-top: 8px; }
+  .flow-note code { color: var(--amber); }
+
+  .stack { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+  .stack span {
+    font-size: 12px; border: 1px solid var(--line); padding: 6px 13px; border-radius: 999px; color: var(--text-dim);
+    transition: all .2s;
+  }
+  .stack span:hover { color: var(--text); border-color: var(--amber); }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--line); padding: 44px 0 60px; }
+  .foot { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 14px; }
+  .foot__brand { font-family: var(--serif); font-style: italic; font-size: 19px; }
+  .foot p { font-size: 12px; color: var(--text-dim); }
+  .foot a { color: var(--long); text-decoration: none; border-bottom: 1px solid rgba(34,197,94,0.35); }
+  .foot a:hover { border-bottom-color: var(--long); }
+
+  /* scroll reveal */
+  .reveal { opacity: 0; transform: translateY(28px); transition: opacity .7s cubic-bezier(0.2,0.7,0.2,1), transform .7s cubic-bezier(0.2,0.7,0.2,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 900px) {
+    .steps, .features { grid-template-columns: 1fr; }
+    .dash-grid { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .flow { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); animation: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ticker -->
+<div class="ticker" aria-hidden="true">
+  <div class="ticker__track">
+    <span><b>ES</b> 6,204.25 <b class="up">▲ 0.42%</b></span>
+    <span><b>NQ</b> 22,681.00 <b class="up">▲ 0.87%</b></span>
+    <span><b>RTY</b> 2,231.40 <b class="down">▼ 0.31%</b></span>
+    <span><b>BTC</b> 104,318 <b class="up">▲ 1.94%</b></span>
+    <span><b>ETH</b> 3,905 <b class="down">▼ 0.58%</b></span>
+    <span><b>SOL</b> 219.44 <b class="up">▲ 3.12%</b></span>
+    <span><b>AUDUSD</b> 0.6642 <b class="up">▲ 0.11%</b></span>
+    <span><b>YM</b> 44,190 <b class="up">▲ 0.26%</b></span>
+    <span><b>GC</b> 3,344.9 <b class="down">▼ 0.14%</b></span>
+    <span><b>ES</b> 6,204.25 <b class="up">▲ 0.42%</b></span>
+    <span><b>NQ</b> 22,681.00 <b class="up">▲ 0.87%</b></span>
+    <span><b>RTY</b> 2,231.40 <b class="down">▼ 0.31%</b></span>
+    <span><b>BTC</b> 104,318 <b class="up">▲ 1.94%</b></span>
+    <span><b>ETH</b> 3,905 <b class="down">▼ 0.58%</b></span>
+    <span><b>SOL</b> 219.44 <b class="up">▲ 3.12%</b></span>
+    <span><b>AUDUSD</b> 0.6642 <b class="up">▲ 0.11%</b></span>
+    <span><b>YM</b> 44,190 <b class="up">▲ 0.26%</b></span>
+    <span><b>GC</b> 3,344.9 <b class="down">▼ 0.14%</b></span>
+  </div>
+</div>
+
+<div class="shell">
+
+  <!-- HERO -->
+  <header class="hero">
+    <span class="kicker">Personal trading toolkit · PWA</span>
+    <h1>Risk first.<br /><em>Size</em> second.</h1>
+    <p class="lede">
+      <b>Position Sizer</b> answers the only question that matters before entry:
+      <b>how much can I buy without betting more than I meant to lose?</b>
+      One calculator for crypto, equities and E-mini futures — plus a live
+      portfolio heatmap across every broker account.
+    </p>
+    <div class="asset-chips">
+      <span class="chip">₿ CRYPTO</span>
+      <span class="chip">◈ EQUITIES</span>
+      <span class="chip">⌗ E-MINI FUTURES</span>
+      <span class="chip">LONG / SHORT</span>
+      <span class="chip">WORKS OFFLINE</span>
+    </div>
+
+    <div class="formula">
+      <div class="formula__label">The governing equation</div>
+      <div class="formula__math">
+        <span>Size&nbsp;=</span>
+        <span class="frac">
+          <span>Equity × <span class="hl-g">Risk&nbsp;%</span></span>
+          <span>| Entry − <span class="hl-r">Stop</span> |</span>
+        </span>
+        <span class="caret"></span>
+      </div>
+      <p class="formula__note">
+        Futures variant: <code>Contracts = (Equity × Risk% × Rate) / (|Entry − Stop| × $/point)</code>
+        — floored to whole contracts, tick-aligned, with actual risk recomputed.
+      </p>
+    </div>
+  </header>
+
+  <!-- HOW IT WORKS -->
+  <section id="how">
+    <div class="sec-head reveal">
+      <span class="sec-index">01</span>
+      <h2>Three inputs. <em>Zero guesswork.</em></h2>
+      <p class="sec-sub">Every trade starts from the account, not the chart. Define what a loss is worth, and the position size falls out deterministically.</p>
+    </div>
+    <div class="steps reveal">
+      <div class="step">
+        <div class="step__num">1</div>
+        <h3>DEFINE THE RISK</h3>
+        <p>Account equity × risk-per-trade. Presets from <code>0.5%</code> to <code>5%</code>, in your account currency — USD, AUD, EUR, or stablecoins for crypto accounts.</p>
+      </div>
+      <div class="step">
+        <div class="step__num">2</div>
+        <h3>MARK THE EXIT</h3>
+        <p>Entry and stop define risk-per-unit. Direction-aware validation: a long's stop must sit <code>below</code> entry, a short's <code>above</code>. FX auto-converts when account and asset currencies differ.</p>
+      </div>
+      <div class="step">
+        <div class="step__num">3</div>
+        <h3>TAKE THE SIZE</h3>
+        <p>Units, notional value, risk per share/contract and R-multiple targets — with potential profit and risk/reward computed the instant a target is set.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CALCULATOR FEATURES -->
+  <section id="calculator">
+    <div class="sec-head reveal">
+      <span class="sec-index">02</span>
+      <h2>The <em>calculator</em></h2>
+      <p class="sec-sub">Three asset tabs, each with fully independent state — your crypto account balance and your equities account balance live side by side, never overwriting each other.</p>
+    </div>
+    <div class="features reveal">
+      <div class="card">
+        <span class="card__tag">Live data</span>
+        <h3>Price on tap</h3>
+        <p>Spot prices from <code>CoinGecko</code> for 27+ mapped coins, <code>Yahoo Finance</code> for tickers &amp; contracts. Futures entries track live, refreshing every 15 seconds until you type your own.</p>
+      </div>
+      <div class="card">
+        <span class="card__tag">FX aware</span>
+        <h3>Cross-currency</h3>
+        <p>AUD account, USD asset? Live rates via <code>Frankfurter</code> convert the risk budget automatically — stablecoins mapped to USD. Rate stays editable for manual override.</p>
+      </div>
+      <div class="card">
+        <span class="card__tag">Targets</span>
+        <h3>R-multiples</h3>
+        <p>One tap projects a target at any multiple of initial risk, rounded to the instrument's precision.</p>
+        <div class="r-row"><span class="r-pill">1×</span><span class="r-pill">2×</span><span class="r-pill">3×</span><span class="r-pill">5×</span></div>
+      </div>
+    </div>
+
+    <div class="contracts reveal">
+      <table>
+        <thead>
+          <tr><th>Contract</th><th>Instrument</th><th class="num">$ / Point</th><th class="num">Tick</th><th class="num">Tick value</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>ES</td><td>E-mini S&amp;P 500</td><td class="num">$50</td><td class="num">0.25</td><td class="num">$12.50</td></tr>
+          <tr><td>MES</td><td>Micro E-mini S&amp;P 500</td><td class="num">$5</td><td class="num">0.25</td><td class="num">$1.25</td></tr>
+          <tr><td>NQ</td><td>E-mini Nasdaq-100</td><td class="num">$20</td><td class="num">0.25</td><td class="num">$5.00</td></tr>
+          <tr><td>MNQ</td><td>Micro E-mini Nasdaq-100</td><td class="num">$2</td><td class="num">0.25</td><td class="num">$0.50</td></tr>
+          <tr><td>YM</td><td>E-mini Dow</td><td class="num">$5</td><td class="num">1.00</td><td class="num">$5.00</td></tr>
+          <tr><td>MYM</td><td>Micro E-mini Dow</td><td class="num">$0.50</td><td class="num">1.00</td><td class="num">$0.50</td></tr>
+          <tr><td>RTY</td><td>E-mini Russell 2000</td><td class="num">$50</td><td class="num">0.10</td><td class="num">$5.00</td></tr>
+          <tr><td>M2K</td><td>Micro E-mini Russell 2000</td><td class="num">$5</td><td class="num">0.10</td><td class="num">$0.50</td></tr>
+          <tr><td>BIP</td><td>Nano Bitcoin Perp (Coinbase)</td><td class="num">$0.01</td><td class="num">5.00</td><td class="num">$0.05</td></tr>
+          <tr><td>ETP</td><td>Nano Ether Perp (Coinbase)</td><td class="num">$0.10</td><td class="num">0.50</td><td class="num">$0.05</td></tr>
+          <tr><td>1OZ</td><td>1-Ounce Gold (COMEX)</td><td class="num">$1</td><td class="num">0.25</td><td class="num">$0.25</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="dashboard">
+    <div class="sec-head reveal">
+      <span class="sec-index">03</span>
+      <h2>The portfolio <em>heatmap</em></h2>
+      <p class="sec-sub">Every open position across Hyperliquid and Interactive Brokers, tiled by gross exposure — asset class → account → position. Green is long, rose is short, indigo is cash.</p>
+    </div>
+
+    <div class="stats reveal">
+      <div class="stat"><span>Gross exposure</span><b>$214,668</b></div>
+      <div class="stat"><span>Net exposure</span><b>$161,008</b></div>
+      <div class="stat"><span>Open PnL</span><b class="neg">−$2,179</b></div>
+      <div class="stat"><span>Positions</span><b>5</b></div>
+    </div>
+
+    <div class="dash-grid reveal">
+      <div>
+        <div class="treemap" role="img" aria-label="Illustrative treemap of portfolio exposure">
+          <div class="tile t-long tm-sata"><small>PREF EQUITY</small><b>SATA</b><span>L 650 · $87,790</span></div>
+          <div class="tile t-cash tm-cash"><small>CASH</small><b>BASE CASH</b><span>$100,048</span></div>
+          <div class="tile t-short tm-slv"><small>METALS</small><b>SLV</b><span>S 100 · $8,750</span></div>
+          <div class="tile t-short tm-silj"><small>METALS</small><b>SILJ</b><span>S 200 · $7,567</span></div>
+          <div class="tile t-short tm-pltr"><small>EQUITIES</small><b>PLTR</b><span>S 30 · $5,795</span></div>
+        </div>
+        <div class="legend">
+          <span><i class="dot d-long"></i>Long</span>
+          <span><i class="dot d-short"></i>Short</span>
+          <span><i class="dot d-cash"></i>Cash</span>
+          <span style="margin-left:auto">sample fixture data</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="balances">
+          <div class="bal bal--on">
+            <div class="bal__name">HYPERLIQUID<small>Perps · collateral value</small></div>
+            <div class="bal__amt">· bal $12,480</div>
+          </div>
+          <div class="bal bal--on">
+            <div class="bal__name">IB PERSONAL<small>Net liquidity incl. cash</small></div>
+            <div class="bal__amt">· bal A$98,320</div>
+          </div>
+          <div class="bal bal--on">
+            <div class="bal__name">IB SMSF<small>Net liquidity incl. cash</small></div>
+            <div class="bal__amt">· bal A$161,000</div>
+          </div>
+        </div>
+        <p class="dash-note">
+          Live balances sit right in each portfolio's heading — Hyperliquid reports true
+          collateral value (never summed perp notionals), IBKR reports net liquidity.
+          Toggle any portfolio off and the treemap re-tiles instantly. Amounts shown here are illustrative.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="architecture">
+    <div class="sec-head reveal">
+      <span class="sec-index">04</span>
+      <h2>Tokens stay <em>home</em></h2>
+      <p class="sec-sub">Broker credentials never enter the browser bundle. A local Node bridge does the talking; the web app only ever sees a normalized snapshot.</p>
+    </div>
+
+    <div class="flow reveal">
+      <div class="node">
+        <b>REACT PWA</b>
+        <span>Vite 7 · React 19<br />Firebase Google auth<br />ECharts treemap</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node node--accent">
+        <b>PORTFOLIO BRIDGE</b>
+        <span>Node · 127.0.0.1:5174<br />tokens in .env.local<br />normalizes all sources</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <b>BROKERS</b>
+        <span>Hyperliquid info API<br />IBKR Flex Web Service<br />(no competing session)</span>
+      </div>
+      <div class="flow-note">
+        IBKR uses <code>Flex Web Service</code> by default — it downloads a configured report rather than opening
+        a Client Portal session, so TWS and mobile stay logged in. Master + subaccount Hyperliquid wallets
+        are pulled read-only by address. Sample data renders when no live source is configured.
+      </div>
+    </div>
+
+    <div class="stack reveal">
+      <span>React 19</span><span>Vite 7</span><span>ECharts 6</span><span>Firebase Auth</span>
+      <span>Firebase Hosting</span><span>vite-plugin-pwa</span><span>Node 20 bridge</span>
+      <span>Hyperliquid API</span><span>IBKR Flex</span><span>CoinGecko</span><span>Yahoo Finance</span><span>Frankfurter FX</span>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="shell foot">
+    <div class="foot__brand">Position Sizer</div>
+    <p>Size the risk, then take the trade · <a href="https://positionsizer.web.app">positionsizer.web.app</a></p>
+  </div>
+</footer>
+
+<script>
+  // scroll reveal
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+    }
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+</script>
+
+</body>
+</html>

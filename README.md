@@ -52,6 +52,76 @@ Firebase setup required before sign-in works:
 2. Enable Google authentication in Firebase Authentication.
 3. Add your local/dev hosting domains to the Firebase authorized domains list.
 
+## Portfolio Dashboard Data
+
+The portfolio dashboard uses a local bridge process so broker tokens stay out of
+the browser bundle.
+
+```bash
+npm run portfolio:bridge
+npm run dev
+```
+
+The default IBKR source is Flex Web Service, not Client Portal Gateway. Flex
+downloads a configured report and does not create a competing brokerage session,
+so it should not disconnect TWS, IBKR Desktop, IBKR Mobile, or other live
+sessions.
+
+Create an Activity Flex Query in IBKR Client Portal with XML output and include
+at least the Open Positions section. Recommended Open Positions fields:
+
+- Account ID
+- Account Alias
+- Currency
+- Asset Class
+- FX Rate to Base
+- Symbol
+- Description
+- Conid
+- Quantity
+- Multiplier
+- Mark Price
+- Position Value
+- Open Price
+- Cost Basis Price
+- Cost Basis Money
+- FIFO Unrealized PNL
+- Side
+- Report Date
+
+If you want cash on the heatmap, also include Cash Report with Currency and
+Ending Cash. The bridge uses the `BASE_SUMMARY` cash row when present.
+
+For one Flex query that includes both IBKR accounts:
+
+```bash
+IBKR_SOURCE_MODE=flex
+IBKR_FLEX_TOKEN=...
+IBKR_FLEX_QUERY_ID=...
+IBKR_FLEX_BASE_CURRENCY=AUD
+```
+
+For two separate Flex queries:
+
+```bash
+IBKR_SOURCE_MODE=flex
+IBKR_FLEX_TOKEN=...
+IBKR_FLEX_BASE_CURRENCY=AUD
+IBKR_FLEX_ACCOUNT_1_LABEL=IB SMSF
+IBKR_FLEX_ACCOUNT_1_FILTER_ID=ib-smsf
+IBKR_FLEX_ACCOUNT_1_QUERY_ID=...
+IBKR_FLEX_ACCOUNT_2_LABEL=IB Personal
+IBKR_FLEX_ACCOUNT_2_FILTER_ID=ib-personal
+IBKR_FLEX_ACCOUNT_2_QUERY_ID=...
+```
+
+If the two accounts require different Flex tokens, set
+`IBKR_FLEX_ACCOUNT_1_TOKEN` and `IBKR_FLEX_ACCOUNT_2_TOKEN`.
+
+By default the bridge converts IBKR positions to the Flex report base currency
+using `fxRateToBase`. Set `IBKR_FLEX_CONVERT_TO_BASE=false` if you want IBKR
+positions left in instrument currency.
+
 ## Usage
 
 1. Select asset type (Crypto, Equity, or Futures)
