@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { useAuth } from './auth-context'
 import LoginPage from './LoginPage'
@@ -136,6 +136,43 @@ const fetchYahooChartData = async (ticker) => {
   }
 }
 
+// FX rate with fallback: Frankfurter (ECB rates, daily) first, then
+// open.er-api.com. The old api.frankfurter.app host now 301-redirects and
+// breaks fetch, so we target the current api.frankfurter.dev/v1 endpoint.
+const fetchFxRate = async (fromCurrency, toCurrency) => {
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.frankfurter.dev/v1/latest?base=${fromCurrency}&symbols=${toCurrency}`
+    )
+
+    if (response.ok) {
+      const data = await response.json()
+      const rate = data?.rates?.[toCurrency]
+
+      if (typeof rate === 'number' && rate > 0) {
+        return rate
+      }
+    }
+  } catch (err) {
+    console.warn('Frankfurter FX fetch failed, trying fallback:', err)
+  }
+
+  const response = await fetchWithTimeout(`https://open.er-api.com/v6/latest/${fromCurrency}`)
+
+  if (!response.ok) {
+    throw new Error('FX rate request failed')
+  }
+
+  const data = await response.json()
+  const rate = data?.rates?.[toCurrency]
+
+  if (typeof rate === 'number' && rate > 0) {
+    return rate
+  }
+
+  throw new Error('Rate not found')
+}
+
 const isPriceAlignedToTick = (value, tickSize) => {
   const roundedToTick = Math.round(value / tickSize) * tickSize
   return Math.abs(roundedToTick - value) < tickSize / 1000
@@ -202,6 +239,7 @@ function App() {
   const accountCurrency = isCrypto ? cryptoAccountCurrency : isEquity ? equityAccountCurrency : futuresAccountCurrency
   const setAccountCurrency = isCrypto ? setCryptoAccountCurrency : isEquity ? setEquityAccountCurrency : setFuturesAccountCurrency
   const [exchangeRate, setExchangeRate] = useState('')
+  const rateRequestIdRef = useRef(0)
   const [rateLoading, setRateLoading] = useState(false)
   const [rateError, setRateError] = useState(null)
   const [rateLastUpdated, setRateLastUpdated] = useState(null)
@@ -219,38 +257,42 @@ function App() {
   const futuresPointDecimals = activeFuturesContract.tickSize < 1 ? 2 : 0
 
   const fetchExchangeRate = async (fromCurrency, toCurrency) => {
+    const requestId = ++rateRequestIdRef.current
+
     if (fromCurrency === toCurrency) {
       setExchangeRate('1')
       setRateLastUpdated(null)
+      setRateError(null)
       return
     }
 
     setRateLoading(true)
     setRateError(null)
+    // Clear the previous pair's rate so the calculator suppresses results
+    // (instead of silently sizing with a stale rate) until this fetch lands.
+    setExchangeRate('')
 
     try {
-      const response = await fetch(
-        `https://api.frankfurter.app/latest?from=${fromCurrency}&to=${toCurrency}`
-      )
+      const rate = await fetchFxRate(fromCurrency, toCurrency)
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch rate')
+      // A newer request (currency changed again) supersedes this one.
+      if (rateRequestIdRef.current !== requestId) {
+        return
       }
 
-      const data = await response.json()
-      const rate = data.rates[toCurrency]
-
-      if (rate) {
-        setExchangeRate(rate.toString())
-        setRateLastUpdated(new Date())
-      } else {
-        throw new Error('Rate not found')
-      }
+      setExchangeRate(rate.toString())
+      setRateLastUpdated(new Date())
     } catch (err) {
-      setRateError('Could not fetch rate')
+      if (rateRequestIdRef.current !== requestId) {
+        return
+      }
+
+      setRateError('Could not fetch rate - enter it manually')
       console.error('Exchange rate fetch error:', err)
     } finally {
-      setRateLoading(false)
+      if (rateRequestIdRef.current === requestId) {
+        setRateLoading(false)
+      }
     }
   }
 
