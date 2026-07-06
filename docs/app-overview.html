@@ -78,6 +78,43 @@
   /* ---------- shell ---------- */
   .shell { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
 
+  /* ---------- launch links ---------- */
+  .app-link {
+    position: fixed; top: 12px; right: 18px; z-index: 70;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 18px;
+    border: 1px solid var(--long);
+    border-radius: 999px;
+    background: rgba(18, 18, 31, 0.82);
+    backdrop-filter: blur(8px);
+    color: var(--long);
+    text-decoration: none;
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600;
+    transition: background .25s, color .25s, transform .25s;
+  }
+  .app-link:hover { background: var(--long); color: var(--ink); transform: translateY(-1px); }
+
+  .cta {
+    display: inline-flex; align-items: center; gap: 12px;
+    margin-top: 36px;
+    padding: 14px 30px;
+    border: 1px solid var(--long);
+    border-radius: 10px;
+    background: rgba(34, 197, 94, 0.08);
+    color: var(--long);
+    text-decoration: none;
+    font-size: 13.5px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 600;
+    transition: background .25s, color .25s, transform .25s, box-shadow .25s;
+    animation: rise 0.8s 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .cta:hover {
+    background: var(--long);
+    color: var(--ink);
+    transform: translateY(-2px);
+    box-shadow: 0 10px 34px rgba(34, 197, 94, 0.28);
+  }
+  .cta span { font-size: 16px; line-height: 1; }
+
   /* ---------- hero ---------- */
   .hero { padding: 88px 0 72px; position: relative; }
   .kicker {
@@ -373,6 +410,8 @@
   </div>
 </div>
 
+<a class="app-link" href="https://positionsizer.web.app">Launch app ↗</a>
+
 <div class="shell">
 
   <!-- HERO -->
@@ -392,6 +431,8 @@
       <span class="chip">LONG / SHORT</span>
       <span class="chip">WORKS OFFLINE</span>
     </div>
+
+    <a class="cta" href="https://positionsizer.web.app">Open the calculator <span>→</span></a>
 
     <div class="formula">
       <div class="formula__label">The governing equation</div>
