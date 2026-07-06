@@ -328,11 +328,27 @@ body {
   box-shadow: inset 0 0 0 3px var(--bg-secondary);
 }
 
+.portfolio-filter-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.4rem;
+  min-width: 0;
+}
+
 .portfolio-filter-option strong {
   display: block;
   color: var(--text-primary);
   font-size: 0.88rem;
   line-height: 1.2;
+}
+
+.portfolio-filter-balance {
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .portfolio-filter-option small {

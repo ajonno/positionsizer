@@ -84,6 +84,73 @@ const filterPositionCounts = (snapshot) => {
   }, {})
 }
 
+// Live account balance (equity) per portfolio filter. Prefers the broker-reported
+// account value carried on snapshot.accounts; falls back to net market value.
+const filterAccountBalances = (snapshot) => {
+  const bucketByAccount = new Map()
+  const netValueByAccount = new Map()
+
+  for (const position of snapshot.positions ?? []) {
+    const accountId = position.accountId
+
+    if (!bucketByAccount.has(accountId)) {
+      bucketByAccount.set(accountId, positionFilterId(position))
+    }
+
+    netValueByAccount.set(accountId, (netValueByAccount.get(accountId) ?? 0) + (Number(position.marketValue) || 0))
+  }
+
+  const balances = {}
+  const counted = new Set()
+
+  const addBalance = (bucket, amount, currency) => {
+    if (!bucket) {
+      return
+    }
+
+    if (!balances[bucket]) {
+      balances[bucket] = { amount: 0, currency }
+    }
+
+    // Disjoint accounts (e.g. Hyperliquid master + subaccounts) sum into one bucket.
+    balances[bucket].amount += Number(amount) || 0
+  }
+
+  // Drive from accounts so a flat account (equity but no open positions) still shows.
+  for (const account of snapshot.accounts ?? []) {
+    const bucket = bucketByAccount.get(account.id) ?? account.portfolioId
+    const equity = account.equity ?? account.netLiquidity ?? netValueByAccount.get(account.id) ?? 0
+    const currency = account.baseCurrency ?? account.currency ?? snapshot.currency ?? 'USD'
+
+    addBalance(bucket, equity, currency)
+    counted.add(account.id)
+  }
+
+  // Fallback for positions whose account is absent from snapshot.accounts.
+  for (const [accountId, bucket] of bucketByAccount) {
+    if (counted.has(accountId)) {
+      continue
+    }
+
+    addBalance(bucket, netValueByAccount.get(accountId) ?? 0, snapshot.currency ?? 'USD')
+  }
+
+  return balances
+}
+
+const formatAccountBalance = (amount, currency) => {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      currencyDisplay: 'narrowSymbol',
+      maximumFractionDigits: 0,
+    }).format(amount)
+  } catch {
+    return `${currency} ${Math.round(amount).toLocaleString()}`
+  }
+}
+
 function PortfolioDashboard() {
   const [snapshot, setSnapshot] = useState(samplePortfolioSnapshot)
   const [status, setStatus] = useState({
@@ -96,6 +163,7 @@ function PortfolioDashboard() {
   const [activeFilters, setActiveFilters] = useState(defaultActiveFilters)
   const visibleSnapshot = useMemo(() => filterSnapshot(snapshot, activeFilters), [snapshot, activeFilters])
   const filterCounts = useMemo(() => filterPositionCounts(snapshot), [snapshot])
+  const filterBalances = useMemo(() => filterAccountBalances(snapshot), [snapshot])
 
   const toggleFilter = (filterId) => {
     setActiveFilters((current) => ({
@@ -165,6 +233,7 @@ function PortfolioDashboard() {
         <div className="portfolio-filter-options">
           {PORTFOLIO_FILTERS.map((filter) => {
             const count = filterCounts[filter.id] ?? 0
+            const balance = filterBalances[filter.id]
 
             return (
               <label key={filter.id} className={`portfolio-filter-option ${activeFilters[filter.id] ? 'active' : ''}`}>
@@ -175,7 +244,14 @@ function PortfolioDashboard() {
                 />
                 <span className="portfolio-filter-checkbox" aria-hidden="true"></span>
                 <span>
-                  <strong>{filter.label}</strong>
+                  <span className="portfolio-filter-heading">
+                    <strong>{filter.label}</strong>
+                    {balance && (
+                      <span className="portfolio-filter-balance">
+                        · bal {formatAccountBalance(balance.amount, balance.currency)}
+                      </span>
+                    )}
+                  </span>
                   <small>{filter.meta} · {count} positions</small>
                 </span>
               </label>

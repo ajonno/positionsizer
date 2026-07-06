@@ -165,6 +165,7 @@ const hyperliquidPositionRows = (state, mids, account) => {
         marketValue: side === 'short' ? -Math.abs(positionValue) : Math.abs(positionValue),
         pnl: asNumber(position.unrealizedPnl),
         pnlPercent: asNumber(position.returnOnEquity) * 100,
+        accountEquity: account.equity,
         currency: 'USD',
       }
     })
@@ -196,11 +197,19 @@ const fetchHyperliquidPositions = async () => {
     throw mids.reason
   }
 
+  // null (not 0) when the field is absent, so a missing/empty clearinghouseState
+  // falls back to net market value instead of being pinned to a reported 0.
+  const accountValueOf = (state) => {
+    const raw = state?.marginSummary?.accountValue
+    return raw === undefined || raw === null || raw === '' ? null : asNumber(raw)
+  }
+
   const accounts = [
     {
       address: masterWallet,
       label: hyperliquidAccountLabel('Hyperliquid Master', masterWallet),
       state: masterState.value,
+      equity: accountValueOf(masterState.value),
     },
   ]
 
@@ -216,11 +225,28 @@ const fetchHyperliquidPositions = async () => {
         address,
         label: item?.name ? `Hyperliquid ${item.name}` : hyperliquidAccountLabel('Hyperliquid Subaccount', address),
         state: item?.clearinghouseState || {},
+        equity: accountValueOf(item?.clearinghouseState),
       })
     }
   }
 
-  return accounts.flatMap((account) => hyperliquidPositionRows(account.state, mids.value, account))
+  // Emit account descriptors independently of positions so that a flat account
+  // (collateral but no open perps) still surfaces its balance. Master and each
+  // subaccount are disjoint collateral pools, so summing them per portfolio later
+  // does not double-count.
+  const accountDescriptors = accounts.map((account) => ({
+    id: `hyperliquid:${account.address}`,
+    label: account.label,
+    source: 'Hyperliquid',
+    portfolioId: 'hyperliquid',
+    baseCurrency: 'USD',
+    equity: account.equity,
+  }))
+
+  return {
+    positions: accounts.flatMap((account) => hyperliquidPositionRows(account.state, mids.value, account)),
+    accounts: accountDescriptors,
+  }
 }
 
 const ibkrFetchJson = async (path) => {
@@ -671,12 +697,41 @@ const createAccounts = (positions) => {
         id: position.accountId,
         label: position.accountLabel,
         source: position.source,
+        portfolioId: position.portfolioId,
         baseCurrency: position.currency,
+        equity: 0,
+        hasReportedEquity: false,
       })
+    }
+
+    // Prefer a broker-reported account value (e.g. Hyperliquid marginSummary.accountValue);
+    // otherwise net liquidity = sum of signed position market values (incl. the base-cash row).
+    const account = accounts.get(position.accountId)
+    const reportedEquity = position.accountEquity
+
+    if (reportedEquity !== undefined && reportedEquity !== null && reportedEquity !== '') {
+      account.equity = asNumber(reportedEquity)
+      account.hasReportedEquity = true
+    } else if (!account.hasReportedEquity) {
+      account.equity += asNumber(position.marketValue)
     }
   }
 
-  return Array.from(accounts.values())
+  return Array.from(accounts.values()).map(({ hasReportedEquity, ...account }) => account)
+}
+
+// Accounts derived from positions win (they carry computed equity); source-declared
+// accounts add any that have no positions (e.g. a flat Hyperliquid account).
+const mergeAccounts = (derivedAccounts, explicitAccounts) => {
+  const byId = new Map(derivedAccounts.map((account) => [account.id, account]))
+
+  for (const account of explicitAccounts) {
+    if (!byId.has(account.id)) {
+      byId.set(account.id, account)
+    }
+  }
+
+  return Array.from(byId.values())
 }
 
 const snapshotCurrency = (positions) => {
@@ -697,12 +752,18 @@ const portfolioSnapshot = async () => {
 
   const settled = await Promise.allSettled(requests.map((request) => request.fetcher()))
   const positions = []
+  const explicitAccounts = []
   const sources = settled.map((result, index) => {
     const { label } = requests[index]
 
     if (result.status === 'fulfilled') {
-      positions.push(...result.value)
-      return displaySourceStatus(label, 'ok', result.value.length)
+      // A fetcher returns either a positions array or { positions, accounts }.
+      const value = result.value
+      const resultPositions = Array.isArray(value) ? value : (value?.positions ?? [])
+      const resultAccounts = Array.isArray(value) ? [] : (value?.accounts ?? [])
+      positions.push(...resultPositions)
+      explicitAccounts.push(...resultAccounts)
+      return displaySourceStatus(label, 'ok', resultPositions.length)
     }
 
     return displaySourceStatus(label, 'error', 0, result.reason instanceof Error ? result.reason.message : String(result.reason))
@@ -734,7 +795,7 @@ const portfolioSnapshot = async () => {
         id: `portfolio-bridge-${Date.now()}`,
         currency: snapshotCurrency(positions),
         asOf: refreshedAt,
-        accounts: createAccounts(positions),
+        accounts: mergeAccounts(createAccounts(positions), explicitAccounts),
         positions,
       },
       status: {
