@@ -643,10 +643,10 @@ function App() {
     })
   }
 
-  // Format crypto quantity with more precision
-  const formatCryptoQty = (num) => {
+  // Crypto and fractional-share venues can support very small quantities.
+  const formatFractionalQuantity = (num) => {
     return num.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
+      minimumFractionDigits: 0,
       maximumFractionDigits: 8
     })
   }
@@ -1051,7 +1051,7 @@ function App() {
                   <div className="result-item highlight">
                     <span className="result-label">Size in {cryptoSymbol || 'Units'}</span>
                     <span className="result-value">
-                      {formatCryptoQty(result.positionSize)} {cryptoSymbol || 'units'}
+                      {formatFractionalQuantity(result.positionSize)} {cryptoSymbol || 'units'}
                     </span>
                   </div>
                   <div className="result-item highlight-secondary">
@@ -1088,7 +1088,7 @@ function App() {
                   <div className="result-item highlight">
                     <span className="result-label">Position Size</span>
                     <span className="result-value">
-                      {formatNumber(result.positionSize, 0)} shares
+                      {formatFractionalQuantity(result.positionSize)} shares
                     </span>
                   </div>
                   <div className="result-item">
